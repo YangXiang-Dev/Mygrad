@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>MyGrad Training Viz</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #eee; padding: 20px; }
+h1 { font-size: 20px; margin-bottom: 12px; color: #e94560; }
+.container { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; max-width: 1000px; margin: 0 auto; }
+.panel { background: #16213e; border-radius: 8px; padding: 16px; }
+.panel h2 { font-size: 14px; color: #888; margin-bottom: 8px; }
+canvas { width: 100%; border-radius: 4px; }
+.controls { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; }
+.controls input[type=range] { flex: 1; }
+.status { font-size: 13px; color: #e94560; }
+.stats { font-size: 14px; font-variant-numeric: tabular-nums; }
+#loading { text-align: center; padding: 40px; font-size: 16px; color: #888; }
+</style>
+</head>
+<body>
+<h1>MyGrad Training Visualizer</h1>
+<div id="loading">Loading training data...</div>
+<div class="container" id="app" style="display:none">
+  <div class="panel">
+    <h2>Decision Boundary</h2>
+    <canvas id="boundary" width="500" height="400"></canvas>
+  </div>
+  <div class="panel">
+    <h2>Loss & Accuracy</h2>
+    <canvas id="charts" width="500" height="400"></canvas>
+  </div>
+  <div class="panel controls">
+    <span class="stats" id="info"></span>
+    <input type="range" id="slider" min="0" max="0" value="0">
+    <span class="status" id="stepLabel">0</span>
+  </div>
+</div>
+
+<script>
+let data = null;
+let currentStep = 0;
+
+const slider = document.getElementById('slider');
+const info = document.getElementById('info');
+const stepLabel = document.getElementById('stepLabel');
+
+slider.addEventListener('input', () => {
+  currentStep = parseInt(slider.value);
+  render();
+});
+
+document.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const dir = e.deltaY > 0 ? 1 : -1;
+  currentStep = Math.max(0, Math.min(parseInt(slider.max), currentStep + dir));
+  slider.value = currentStep;
+  render();
+}, { passive: false });
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowRight' || e.key === 'ArrowUp') {
+    currentStep = Math.min(parseInt(slider.max), currentStep + 1);
+    slider.value = currentStep;
+    render();
+  } else if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {
+    currentStep = Math.max(0, currentStep - 1);
+    slider.value = currentStep;
+    render();
+  }
+});
+
+async function init() {
+  const r = await fetch('training_data.json');
+  data = await r.json();
+  slider.max = data.steps.length - 1;
+  slider.value = data.steps.length - 1;
+  currentStep = data.steps.length - 1;
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('app').style.display = 'grid';
+  render();
+}
+
+function render() {
+  const step = data.steps[currentStep];
+  info.textContent = `Step ${step.step} | Loss ${step.loss.toFixed(4)} | Acc ${(step.acc * 100).toFixed(0)}%`;
+  stepLabel.textContent = `${step.step} / ${data.steps.length - 1}`;
+  drawBoundary(step);
+  drawCharts(currentStep);
+}
+
+function drawBoundary(step) {
+  const c = document.getElementById('boundary');
+  const ctx = c.getContext('2d');
+  const W = c.width, H = c.height;
+  ctx.clearRect(0, 0, W, H);
+
+  const g = data.grid;
+  const mapX = x => (x - g.x_min) / (g.x_max - g.x_min) * W;
+  const mapY = y => H - (y - g.y_min) / (g.y_max - g.y_min) * H;
+
+  const boundary = data.boundaries[String(step.step)];
+  if (boundary) {
+    const cellW = W / g.cols;
+    const cellH = H / g.rows;
+    for (let r = 0; r < g.rows; r++) {
+      for (let c2 = 0; c2 < g.cols; c2++) {
+        const v = boundary[r * g.cols + c2];
+        ctx.fillStyle = v ? 'rgba(65,105,225,0.4)' : 'rgba(220,60,60,0.4)';
+        ctx.fillRect(c2 * cellW, (g.rows - 1 - r) * cellH, cellW, cellH);
+      }
+    }
+  }
+
+  const X = data.X, y = data.y;
+  for (let i = 0; i < X.length; i++) {
+    const px = mapX(X[i][0]), py = mapY(X[i][1]);
+    ctx.beginPath();
+    ctx.arc(px, py, 4, 0, Math.PI * 2);
+    ctx.fillStyle = y[i] > 0.5 ? '#4169E1' : '#DC3C3C';
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+}
+
+function drawCharts(highlight) {
+  const c = document.getElementById('charts');
+  const ctx = c.getContext('2d');
+  const W = c.width, H = c.height;
+  ctx.clearRect(0, 0, W, H);
+
+  const steps = data.steps;
+  const n = steps.length;
+  if (n < 2) return;
+
+  const pad = { l: 50, r: 20, t: 20, b: 40 };
+  const cw = W - pad.l - pad.r;
+  const ch = (H - pad.t - pad.b - 20) / 2;
+
+  drawLine(ctx, steps.map(s => s.loss), pad.l, pad.t, cw, ch, '#e94560', 'Loss', highlight);
+  drawLine(ctx, steps.map(s => s.acc), pad.l, pad.t + ch + 20, cw, ch, '#0f3460', 'Accuracy', highlight, true);
+}
+
+function drawLine(ctx, vals, ox, oy, w, h, color, label, highlight, isAcc) {
+  const n = vals.length;
+  const maxV = isAcc ? 1 : Math.max(...vals) * 1.1 || 1;
+  const minV = isAcc ? 0 : Math.min(...vals) * 0.9;
+  const range = maxV - minV || 1;
+
+  ctx.save();
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(ox, oy); ctx.lineTo(ox, oy + h); ctx.lineTo(ox + w, oy + h);
+  ctx.stroke();
+
+  ctx.fillStyle = '#888';
+  ctx.font = '12px system-ui';
+  ctx.fillText(label, ox + 4, oy + 14);
+
+  ctx.fillStyle = '#555';
+  ctx.font = '10px system-ui';
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= 4; i++) {
+    const v = minV + (range * i / 4);
+    const py = oy + h - (i / 4) * h;
+    ctx.fillText(v.toFixed(isAcc ? 2 : 3), ox - 4, py + 3);
+  }
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const px = ox + (i / (n - 1)) * w;
+    const py = oy + h - ((vals[i] - minV) / range) * h;
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+
+  if (highlight >= 0 && highlight < n) {
+    const px = ox + (highlight / (n - 1)) * w;
+    const py = oy + h - ((vals[highlight] - minV) / range) * h;
+    ctx.beginPath();
+    ctx.arc(px, py, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#fff';
+    ctx.fill();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+init();
+</script>
+</body>
+</html>
