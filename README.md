@@ -11,6 +11,10 @@ A from-scratch neural network with automatic differentiation, built by studying 
 - **export_data.py** — Exports training data to JSON for the SPA
 - **training_data.json** — 300 epochs of training data (decision boundaries on a 49×70 grid)
 
+## Live demo
+
+https://yangxiang-dev.github.io/Mygrad/index.html
+
 ## Quick start
 
 Train and visualize in real-time:
